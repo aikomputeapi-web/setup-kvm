@@ -15,6 +15,22 @@ CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
+# ==========================================
+# 🗂️  GLOBAL PATHS & DEFAULTS
+# ==========================================
+VPS_DIR="$HOME/kvm-vps"
+BASE_DIR="$VPS_DIR/base"
+TCP_HOST_PORT=2222
+TCP_GUEST_PORT=22
+RAM_GB=2
+CPU_CORES=2
+DISK_GB=10
+USER_NAME=ubuntu
+USER_PASS=1221
+VM_NAME=ubuntu-vm
+SSH_KEY=""
+CF_HOST=""
+
 # FUNCTION: TYPING EFFECT ANIMATION
 type_effect() {
     local text="$1"
@@ -49,6 +65,13 @@ else
 fi
 
 # ==========================================
+# HELPER: VM RUNNING CHECK
+# ==========================================
+vm_running() {
+    [ -f "$VPS_DIR/$VM_NAME/vm.pid" ] && kill -0 "$(cat "$VPS_DIR/$VM_NAME/vm.pid")" 2>/dev/null
+}
+
+# ==========================================
 # MAIN INTERACTIVE LIST MENU
 # ==========================================
 show_menu() {
@@ -57,7 +80,7 @@ show_menu() {
     echo -e "${WHITE}          [👹 KVM VPS PREMIUM SERVER DASHBOARD 👹]          ${NC}"
     echo -e "${RED}==========================================================${NC}"
     echo -e "${WHITE}                ┌─────────────────────────┐               ${NC}"
-    echo -e "${WHITE}                │  ${RED}█▀█ █▀▀█ █▀▄▀█ █▄▄█${WHITE}   │  <[KVM PRO] ${NC}"
+    echo -e "${WHITE}                │  ${RED}█▀█ █▀▀█ █▀▄▀█ █▄▄█${WHITE}   │  <[QEMU PRO] ${NC}"
     echo -e "${WHITE}                │  ${RED}█▄█ █▄▄█ █─▀─█ █▄▄█${WHITE}   │               ${NC}"
     echo -e "${WHITE}                └─────────────────────────┘               ${NC}"
     echo -e "${PURPLE}                   (█)─(█)     (█)─(█)                   ${NC}"
@@ -73,72 +96,86 @@ show_menu() {
     echo ""
     echo -e "${YELLOW}👉 SELECT AN OPTION TO PROCEED FROM LIST:${NC}"
     echo ""
-    echo -e "  ${CYAN}[1]${NC} Install KVM Stack (One-Time Setup)"
-    echo -e "  ${CYAN}[2]${NC} Create & Boot New Ubuntu VM Instance"
-    echo -e "  ${CYAN}[3]${NC} List VMs & Get Connect Info"
-    echo -e "  ${CYAN}[4]${NC} Restart Existing VM Instance"
-    echo -e "  ${CYAN}[5]${NC} Remove/Delete VM Instance"
-    echo -e "  ${CYAN}[6]${NC} Exit Dashboard"
+    echo -e "  ${CYAN}[1]${NC} Install Dependencies (qemu + cloudflared + tools)"
+    echo -e "  ${CYAN}[2]${NC} Create & Boot New Ubuntu VM"
+    echo -e "  ${CYAN}[3]${NC} VM Status & Connect Info"
+    echo -e "  ${CYAN}[4]${NC} Restart VM Instance"
+    echo -e "  ${CYAN}[5]${NC} Stop VM Instance"
+    echo -e "  ${CYAN}[6]${NC} Remove/Delete VM Instance"
+    echo -e "  ${CYAN}[7]${NC} Enable/Disable Autostart on Boot"
+    echo -e "  ${CYAN}[8]${NC} Exit Dashboard"
     echo ""
     echo -e "${RED}==========================================================${NC}"
-    echo -ne "${WHITE}🔹 Enter Choice [1-6]: ${NC}"
+    echo -ne "${WHITE}🔹 Enter Choice [1-8]: ${NC}"
     read CHOICE
 
     case $CHOICE in
-        1) install_kvm ;;
+        1) install_deps ;;
         2) create_vps ;;
-        3) list_vps ;;
+        3) vps_status ;;
         4) restart_vps ;;
-        5) remove_vps ;;
-        6) exit 0 ;;
-        *) echo -e "${RED}❌ Invalid Choice! Please select 1-6.${NC}"; sleep 2; show_menu ;;
+        5) stop_vps ;;
+        6) remove_vps ;;
+        7) toggle_autostart ;;
+        8) exit 0 ;;
+        *) echo -e "${RED}❌ Invalid Choice! Please select 1-8.${NC}"; sleep 2; show_menu ;;
     esac
 }
 
-# STEP 0: INSTALL THE FULL KVM/LIBVIRT STACK
-install_kvm() {
+# ==========================================
+# STEP 0: INSTALL DEPENDENCIES
+# ==========================================
+install_deps() {
     clear
     echo -e "${RED}==========================================================${NC}"
-    echo -e "${WHITE}⚙️  INSTALLING KVM + LIBVIRT VIRTUALIZATION STACK${NC}"
+    echo -e "${WHITE}⚙️  INSTALLING QEMU + CLOUDFLARE DEPENDENCIES${NC}"
     echo -e "${RED}==========================================================${NC}"
     echo ""
 
     loading_bar "Updating Package Lists"
     $SUDO_CMD apt-get update -y > /dev/null 2>&1
 
-    loading_bar "Installing KVM/QEMU Core Engine"
-    $SUDO_CMD DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        qemu-kvm qemu-utils libvirt-daemon-system libvirt-clients \
-        virtinst bridge-utils dnsmasq-base dnsmasq-utils ebtables iptables \
-        cloud-image-utils genisoimage wget curl > /dev/null 2>&1
+    loading_bar "Installing QEMU + Cloud Tools"
+    $SUDO_CMD apt-get install -y \
+        qemu-system-x86 qemu-utils cloud-image-utils wget curl iproute2 > /dev/null 2>&1
 
-    loading_bar "Activating libvirtd Service"
-    $SUDO_CMD systemctl enable libvirtd > /dev/null 2>&1
-    $SUDO_CMD systemctl start libvirtd > /dev/null 2>&1
-
-    if [ -n "${SUDO_USER:-}" ]; then
-        loading_bar "Granting libvirt Access to $SUDO_USER"
-        $SUDO_CMD usermod -aG libvirt "$SUDO_USER" > /dev/null 2>&1
-        $SUDO_CMD usermod -aG kvm "$SUDO_USER" > /dev/null 2>&1
+    loading_bar "Installing cloudflared (Cloudflare Tunnel)"
+    if ! command -v cloudflared > /dev/null 2>&1; then
+        $SUDO_CMD wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -O /usr/local/bin/cloudflared
+        $SUDO_CMD chmod +x /usr/local/bin/cloudflared
+    else
+        echo -e "${GREEN}✅ cloudflared already installed: $(cloudflared --version)${NC}"
     fi
-
-    loading_bar "Configuring Default NAT Network"
-    $SUDO_CMD virsh net-start default > /dev/null 2>&1 || true
-    $SUDO_CMD virsh net-autostart default > /dev/null 2>&1
 
     echo ""
     if [ -e /dev/kvm ]; then
-        echo -e "${GREEN}✅ KVM ACCELERATION READY! (/dev/kvm detected)${NC}"
+        echo -e "${GREEN}✅ KVM ACCELERATION AVAILABLE — VMs will run FAST.${NC}"
     else
-        echo -e "${RED}⚠️ /dev/kvm missing — enable virtualization in BIOS/nested virt.${NC}"
+        echo -e "${YELLOW}⚠️  /dev/kvm not found — using SOFTWARE emulation (TCG).${NC}"
+        echo -e "${YELLOW}   VMs run slower but still work in the sandbox.${NC}"
     fi
-    echo -e "${YELLOW}🔄 NOTE: Log out/in (or newgrp libvirt) to use virsh without sudo.${NC}"
     echo ""
     read -p "Press Enter to return to dashboard..." _
     show_menu
 }
 
-# STEP 1: CREATE VM — ASKS FOR VM SIZE
+install_deps_silent() {
+    if ! command -v qemu-system-x86_64 > /dev/null 2>&1; then
+        $SUDO_CMD apt-get update -y > /dev/null 2>&1
+        $SUDO_CMD apt-get install -y \
+            qemu-system-x86 qemu-utils cloud-image-utils wget curl iproute2 > /dev/null 2>&1
+    fi
+    if ! command -v cloudflared > /dev/null 2>&1; then
+        $SUDO_CMD wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -O /usr/local/bin/cloudflared
+        $SUDO_CMD chmod +x /usr/local/bin/cloudflared
+    fi
+}
+
+# ==========================================
+# STEP 1: CREATE & BOOT VM
+# ==========================================
 create_vps() {
     clear
     echo -e "${RED}==========================================================${NC}"
@@ -150,183 +187,454 @@ create_vps() {
     read VM_NAME
     VM_NAME=${VM_NAME:-ubuntu-vm}
 
-    echo -ne "${BLUE}🔹 Enter RAM Size in GB (e.g., 2, 4, 8, 16, 32): ${NC}"
+    if vm_running; then
+        echo -e "${RED}❌ VM '$VM_NAME' is already running!${NC}"; sleep 2; show_menu
+    fi
+
+    echo -ne "${BLUE}🔹 Enter RAM Size in GB (e.g., 2, 4, 8): ${NC}"
     read RAM_GB
-    RAM_GB=${RAM_GB:-2}
-
-    echo -ne "${BLUE}🔹 Enter CPU Cores (e.g., 1, 2, 4, 8): ${NC}"
+    echo -ne "${BLUE}🔹 Enter CPU Cores (e.g., 1, 2, 4): ${NC}"
     read CPU_CORES
-    CPU_CORES=${CPU_CORES:-2}
-
-    echo -ne "${BLUE}🔹 Enter DISK Size in GB (e.g., 10, 20, 50, 100): ${NC}"
+    echo -ne "${BLUE}🔹 Enter DISK Size in GB (e.g., 10, 20, 50): ${NC}"
     read DISK_GB
-    DISK_GB=${DISK_GB:-20}
+    echo -ne "${BLUE}🔹 Enter SSH Host Port (Default: 2222): ${NC}"
+    read TCP_HOST_PORT
 
     echo -ne "${BLUE}🔹 Create Username (Default: ubuntu): ${NC}"
     read USER_NAME
     USER_NAME=${USER_NAME:-ubuntu}
 
-    echo -ne "${BLUE}🔹 Create Password (Default: 1234): ${NC}"
+    echo -ne "${BLUE}🔹 Password (Default: 1221): ${NC}"
     read USER_PASS
-    USER_PASS=${USER_PASS:-1234}
+    USER_PASS=${USER_PASS:-1221}
 
-    # sanity check CPU/RAM aren't nonsense
+    echo -ne "${BLUE}🔹 SSH public key to install (blank to skip): ${NC}"
+    read SSH_KEY
+
+    # Sanity-check numeric inputs
     RAM_GB=$(echo "$RAM_GB" | grep -oE '^[0-9]+$' || echo 2)
     CPU_CORES=$(echo "$CPU_CORES" | grep -oE '^[0-9]+$' || echo 2)
-    DISK_GB=$(echo "$DISK_GB" | grep -oE '^[0-9]+$' || echo 20)
+    DISK_GB=$(echo "$DISK_GB" | grep -oE '^[0-9]+$' || echo 10)
+    TCP_HOST_PORT=$(echo "$TCP_HOST_PORT" | grep -oE '^[0-9]+$' || echo 2222)
+    [ "$TCP_HOST_PORT" -ge 1024 ] || { echo -e "${RED}❌ Port must be >= 1024.${NC}"; TCP_HOST_PORT=2222; }
 
     echo ""
     echo -e "${YELLOW}⏳ Background core dependencies install ho rahi hain... Please wait.${NC}"
     echo ""
 
-    $SUDO_CMD apt-get update -y > /dev/null 2>&1
-    $SUDO_CMD apt-get install -y qemu-kvm qemu-utils libvirt-clients virtinst cloud-image-utils wget curl > /dev/null 2>&1
+    install_deps_silent
 
-    # Custom absolute path architecture build
-    $SUDO_CMD mkdir -p /var/lib/libvirt/images > /dev/null 2>&1
-    BASE_IMAGE="/var/lib/libvirt/images/jammy-base.img"
-    VM_IMAGE="/var/lib/libvirt/images/${VM_NAME}.qcow2"
+    mkdir -p "$VPS_DIR/$VM_NAME" "$BASE_DIR"
+    BASE_IMAGE="$BASE_DIR/jammy-base.qcow2"
+    DISK_IMAGE="$VPS_DIR/$VM_NAME/disk.qcow2"
 
     if [ ! -f "$BASE_IMAGE" ]; then
-        echo -e "${YELLOW}📥 Downloading Ubuntu 22.04 Cloud Image to /var/lib/libvirt/images/...${NC}"
-        $SUDO_CMD wget -q --show-progress https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O "$BASE_IMAGE"
-        $SUDO_CMD chmod 666 "$BASE_IMAGE"
+        echo -e "${YELLOW}📥 Downloading Ubuntu 22.04 Cloud Image (once)...${NC}"
+        wget -q --show-progress https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O "$BASE_IMAGE"
+        chmod 600 "$BASE_IMAGE"
     else
-        echo -e "${GREEN}✅ Existing Image Cache Detected at $BASE_IMAGE.${NC}"
+        echo -e "${GREEN}✅ Base Image Cache Detected at $BASE_IMAGE.${NC}"
     fi
 
     loading_bar "Generating Cloud-Init Matrix"
-    cat <<EOF > user-data
+    cat > "$VPS_DIR/$VM_NAME/user-data" <<EOF
 #cloud-config
+users:
+  - name: ${USER_NAME}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    plain_text_passwd: ${USER_PASS}
+    shell: /bin/bash
 ssh_pwauth: True
 chpasswd:
   list: |
     ${USER_NAME}:${USER_PASS}
   expire: False
+runcmd:
+  - [sh, -c, "echo '0 3 * * * root /sbin/fstrim -a >/dev/null 2>&1' > /etc/cron.d/fstrim"]
 EOF
+    if [ -n "$SSH_KEY" ]; then
+        cat >> "$VPS_DIR/$VM_NAME/user-data" <<EOF
+
+ssh_authorized_keys:
+  - ${SSH_KEY}
+EOF
+    fi
+    cloud-localds "$VPS_DIR/$VM_NAME/seed.img" "$VPS_DIR/$VM_NAME/user-data" > /dev/null 2>&1
+    chmod 600 "$VPS_DIR/$VM_NAME/seed.img"
 
     loading_bar "Allocating Server Hard Disk (${DISK_GB}G)"
-    $SUDO_CMD qemu-img create -f qcow2 -b "$BASE_IMAGE" -F qcow2 "$VM_IMAGE" ${DISK_GB}G > /dev/null 2>&1
+    if [ -f "$DISK_IMAGE" ]; then
+        rm -f "$DISK_IMAGE"
+    fi
+    qemu-img create -f qcow2 -b "$BASE_IMAGE" -F qcow2 "$DISK_IMAGE" ${DISK_GB}G > /dev/null 2>&1
+    chmod 600 "$DISK_IMAGE"
 
     save_env
-    boot_qemu
+    write_scripts
+    start_vm
+    start_tunnels
+    echo ""
+    read -p "Press Enter to return to dashboard..." _
+    show_menu
 }
 
 save_env() {
-    cat > .vps_env <<EOF
-VM_NAME=${VM_NAME:-ubuntu-vm}
-VM_IMAGE=${VM_IMAGE:-/var/lib/libvirt/images/ubuntu-vm.qcow2}
-RAM_GB=${RAM_GB:-2}
-CPU_CORES=${CPU_CORES:-2}
-DISK_GB=${DISK_GB:-20}
-USER_NAME=${USER_NAME:-ubuntu}
-USER_PASS=${USER_PASS:-1234}
+    cat > "$VPS_DIR/$VM_NAME/.vps_env" <<EOF
+VM_NAME=${VM_NAME}
+DISK_IMAGE=${DISK_IMAGE}
+RAM_GB=${RAM_GB}
+CPU_CORES=${CPU_CORES}
+DISK_GB=${DISK_GB}
+TCP_HOST_PORT=${TCP_HOST_PORT}
+TCP_GUEST_PORT=${TCP_GUEST_PORT}
+USER_NAME=${USER_NAME}
+USER_PASS=${USER_PASS}
 EOF
 }
 
-# STEP 2: BOOT THE VM WITH THE SELECTED SPECS
-boot_qemu() {
-    if [ -f ".vps_env" ]; then
-        source .vps_env
+# Generate self-contained start/stop/tunnel/supervisor scripts
+write_scripts() {
+    VDIR="$VPS_DIR/$VM_NAME"
+
+    # ----- start.sh : boot the VM daemonized with all perf opts -----
+    cat > "$VDIR/start.sh" <<EOF
+#!/usr/bin/env bash
+source "$VDIR/.vps_env"
+export PATH="\$PATH:/usr/bin:/usr/local/bin"
+
+if [ -f "$VDIR/vm.pid" ] && kill -0 "\$(cat "$VDIR/vm.pid")" 2>/dev/null; then
+    echo "VM already running."; exit 0
+fi
+
+# Refuse to start if the host port is already taken
+if ss -ltn 2>/dev/null | awk '{print \$4}' | grep -qE ":\${TCP_HOST_PORT}\$"; then
+    echo "ERROR: port \${TCP_HOST_PORT} already in use. Stop that process or pick another port."
+    exit 1
+fi
+
+# Auto-select accelerator + CPU model
+QEMU_ACCEL="-enable-kvm"
+QEMU_CPU="-cpu host"
+if [ ! -e /dev/kvm ]; then
+    QEMU_ACCEL="-accel tcg,thread=multi,tb-size=1024"
+    QEMU_CPU="-cpu max"
+fi
+
+# Rotate logs (keep 1 old copy so we don't grow forever)
+[ -f "$VDIR/serial.log" ] && mv "$VDIR/serial.log" "$VDIR/serial.log.1" 2>/dev/null
+[ -f "$VDIR/qemu.log" ]   && mv "$VDIR/qemu.log"   "$VDIR/qemu.log.1"   2>/dev/null
+
+# virtio disk + NIC (much faster than emulated e1000/ide),
+# cache=writeback + discard=unmap so guest fstrim shrinks the qcow2 on the host.
+qemu-system-x86_64 \\
+    -drive file="\$DISK_IMAGE",format=qcow2,if=virtio,cache=writeback,discard=unmap \\
+    -m "\${RAM_GB}G" \\
+    -smp "\${CPU_CORES}" \\
+    -drive file="$VDIR/seed.img",format=raw,if=virtio,readonly=on \\
+    -display none \\
+    -monitor none \\
+    -serial file:"$VDIR/serial.log" \\
+    \$QEMU_ACCEL \$QEMU_CPU \\
+    -netdev user,id=net0,hostfwd=tcp::\${TCP_HOST_PORT}-:\${TCP_GUEST_PORT} \\
+    -device virtio-net-pci,netdev=net0 \\
+    -daemonize \\
+    -pidfile "$VDIR/vm.pid" \\
+    >> "$VDIR/qemu.log" 2>&1
+
+echo "VM started (PID \$(cat "$VDIR/vm.pid" 2>/dev/null))."
+EOF
+    chmod +x "$VDIR/start.sh"
+
+    # ----- stop.sh : stop the VM -----
+    cat > "$VDIR/stop.sh" <<EOF
+#!/usr/bin/env bash
+if [ -f "$VDIR/vm.pid" ]; then
+    PID=\$(cat "$VDIR/vm.pid")
+    if kill -0 "\$PID" 2>/dev/null; then
+        kill "\$PID" 2>/dev/null
+        sleep 3
+        kill -9 "\$PID" 2>/dev/null || true
+        echo "VM stopped."
+    else
+        echo "VM not running."
+    fi
+    rm -f "$VDIR/vm.pid"
+fi
+EOF
+    chmod +x "$VDIR/stop.sh"
+
+    # ----- tunnel.sh : manage BOTH sshx + cloudflared tunnels -----
+    cat > "$VDIR/tunnel.sh" <<EOF
+#!/usr/bin/env bash
+source "$VDIR/.vps_env"
+export PATH="\$PATH:/usr/bin:/usr/local/bin"
+CMD="\${1:-start}"
+
+case "\$CMD" in
+  start)
+    # --- SSHX web terminal ---
+    if [ -f "$VDIR/sshx.pid" ] && kill -0 "\$(cat "$VDIR/sshx.pid")" 2>/dev/null; then
+        echo "sshx already running."
+    else
+        nohup setsid sh -c "curl -sSf https://sshx.io/get | sh -s run" \\
+            </dev/null > "$VDIR/sshx.log" 2>&1 &
+        echo \$! > "$VDIR/sshx.pid"
+        echo "sshx tunnel starting..."
     fi
 
-    RAM_VALUE="${RAM_GB:-2}G"
+    # --- Cloudflare TCP tunnel (reverse SSH) ---
+    if [ -f "$VDIR/cf.pid" ] && kill -0 "\$(cat "$VDIR/cf.pid")" 2>/dev/null; then
+        echo "cloudflared already running."
+    else
+        nohup setsid cloudflared tunnel --url tcp://localhost:\${TCP_HOST_PORT} \\
+            --no-autoupdate --loglevel info \\
+            </dev/null > "$VDIR/cf.log" 2>&1 &
+        echo \$! > "$VDIR/cf.pid"
+        echo "cloudflared tunnel starting..."
+    fi
 
+    # --- Poll for the trycloudflare hostname (up to 60s) ---
+    CF_HOST=""
+    for i in \$(seq 1 60); do
+        CF_HOST=\$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$VDIR/cf.log" 2>/dev/null | head -n1 | sed 's|https://||')
+        [ -n "\$CF_HOST" ] && break
+        sleep 1
+    done
+    [ -n "\$CF_HOST" ] && echo "\$CF_HOST" > "$VDIR/connect.txt"
+    [ -n "\$CF_HOST" ] && echo "Cloudflare hostname: \$CF_HOST"
+    ;;
+  stop)
+    [ -f "$VDIR/sshx.pid" ] && kill "\$(cat "$VDIR/sshx.pid")" 2>/dev/null
+    [ -f "$VDIR/cf.pid" ]   && kill "\$(cat "$VDIR/cf.pid")"   2>/dev/null
+    pkill -f "cloudflared tunnel --url tcp://localhost:\${TCP_HOST_PORT}" 2>/dev/null || true
+    rm -f "$VDIR/sshx.pid" "$VDIR/cf.pid"
+    echo "Tunnels stopped."
+    ;;
+  status)
+    [ -f "$VDIR/cf.pid" ] && kill -0 "\$(cat "$VDIR/cf.pid")" 2>/dev/null && echo "cloudflared: RUNNING" || echo "cloudflared: stopped"
+    [ -f "$VDIR/sshx.pid" ] && kill -0 "\$(cat "$VDIR/sshx.pid")" 2>/dev/null && echo "sshx: RUNNING" || echo "sshx: stopped"
+    ;;
+esac
+EOF
+    chmod +x "$VDIR/tunnel.sh"
+
+    # ----- supervisor.sh : auto-restart VM + tunnels if they die (24/7) -----
+    cat > "$VDIR/supervisor.sh" <<EOF
+#!/usr/bin/env bash
+cd "$VDIR" || exit 1
+source "$VDIR/.vps_env"
+export PATH="\$PATH:/usr/bin:/usr/local/bin"
+while true; do
+    if [ -f "$VDIR/vm.pid" ] && kill -0 "\$(cat "$VDIR/vm.pid")" 2>/dev/null; then
+        :
+    else
+        echo "\$(date '+%F %T') VM down -> restarting" >> "$VDIR/supervisor.log"
+        "$VDIR/start.sh" >> "$VDIR/supervisor.log" 2>&1
+        sleep 5
+    fi
+    if [ -f "$VDIR/cf.pid" ] && kill -0 "\$(cat "$VDIR/cf.pid")" 2>/dev/null; then
+        :
+    else
+        echo "\$(date '+%F %T') tunnel down -> restarting" >> "$VDIR/supervisor.log"
+        "$VDIR/tunnel.sh" start >> "$VDIR/supervisor.log" 2>&1
+    fi
+    sleep 15
+done
+EOF
+    chmod +x "$VDIR/supervisor.sh"
+
+    # ----- autostart.sh : launcher for @reboot cron -----
+    cat > "$VDIR/autostart.sh" <<EOF
+#!/usr/bin/env bash
+cd "$VDIR" || exit 1
+setsid ./supervisor.sh >/dev/null 2>&1 &
+echo "Autostart launched supervisor for $VM_NAME."
+EOF
+    chmod +x "$VDIR/autostart.sh"
+}
+
+# ==========================================
+# STEP 2: START VM (daemonized, survives SSH logout)
+# ==========================================
+start_vm() {
     clear
     echo -e "${GREEN}==========================================================${NC}"
     type_effect "👹 DATA SYSTEM SYNCHRONIZED! PIPING TERMINAL CHANNELS..." 0.02
     echo -e "${GREEN}==========================================================${NC}"
     echo ""
-
-    loading_bar "Booting KVM Accelerated VM Instance"
-
-    # Fresh seed image for this boot
-    $SUDO_CMD cloud-localds seed.img user-data > /dev/null 2>&1
-
-    # Boot the VM headless under libvirt
-    $SUDO_CMD virt-install \
-        --name "$VM_NAME" \
-        --memory "$RAM_VALUE" \
-        --vcpus "$CPU_CORES" \
-        --disk path="$VM_IMAGE",format=qcow2 \
-        --disk path="$PWD/seed.img",device=cdrom,format=raw \
-        --os-variant ubuntu22.04 \
-        --network network=default \
-        --import \
-        --graphics none --noautoconsole --noreboot > /dev/null 2>&1
-
-    $SUDO_CMD virsh start "$VM_NAME" > /dev/null 2>&1
-
-    clear
-    echo -e "${GREEN}==========================================================${NC}"
-    echo -e "🎉  KVM VPS - VIRTUAL MACHINE NETWORK ACTIVE        "
-    echo -e "${GREEN}==========================================================${NC}"
-    echo -e "${WHITE}🖥️  VM Name   : ${CYAN}${VM_NAME:-ubuntu-vm}${NC}"
-    echo -e "${WHITE}👤 Username  : ${CYAN}${USER_NAME:-ubuntu}${NC}"
-    echo -e "${WHITE}🔑 Password  : ${CYAN}${USER_PASS:-1234}${NC}"
-    echo -e "${WHITE}⚙️  Resources : ${CYAN}${RAM_VALUE} RAM | ${CPU_CORES:-2} Cores | ${DISK_GB:-20}G Disk${NC}"
-    echo -e "${RED}----------------------------------------------------------${NC}"
-    echo -e "${WHITE}👉 SSH Connect : ssh ${USER_NAME:-ubuntu}@localhost -p 22${NC}"
-    echo -e "${WHITE}👉 (or find IP with: virsh domifaddr ${VM_NAME:-ubuntu-vm})${NC}"
-    echo -e "${RED}----------------------------------------------------------${NC}"
-    echo -e "${YELLOW}🔄 To restart later, use Option 4. To remove, use Option 5.${NC}"
-    echo -e "${GREEN}==========================================================${NC}"
-    echo ""
-    read -p "Press Enter to return to dashboard..." _
-    show_menu
+    "$VPS_DIR/$VM_NAME/start.sh"
+    loading_bar "Booting QEMU Accelerated VM Instance"
 }
 
-# STEP 3: LIST VMs
-list_vps() {
+# ==========================================
+# STEP 3: TUNNELS (sshx + cloudflare), survive logout
+# ==========================================
+start_tunnels() {
+    echo -e "${YELLOW}📡 Launching SSHX + Cloudflare public tunnels...${NC}"
+    "$VPS_DIR/$VM_NAME/tunnel.sh" start
+    show_connect_info
+}
+
+stop_tunnels() {
+    "$VPS_DIR/$VM_NAME/tunnel.sh" stop > /dev/null 2>&1
+}
+
+# ==========================================
+# STEP 4: STATUS & CONNECT INFO
+# ==========================================
+show_connect_info() {
+    CF_HOST=$(cat "$VPS_DIR/$VM_NAME/connect.txt" 2>/dev/null || true)
+    SSHX_URL=$(grep -oE 'https://sshx\.io/s/[a-zA-Z0-9_-]+' "$VPS_DIR/$VM_NAME/sshx.log" 2>/dev/null | head -n1)
+    echo ""
+    echo -e "${GREEN}==========================================================${NC}"
+    echo -e "🎉       KVM VPS - VIRTUAL MACHINE NETWORK ACTIVE        "
+    echo -e "${GREEN}==========================================================${NC}"
+    echo -e "${WHITE}🖥️  VM Name   : ${CYAN}${VM_NAME}${NC}"
+    echo -e "${WHITE}👤 Username  : ${CYAN}${USER_NAME}${NC}"
+    echo -e "${WHITE}🔑 Password  : ${CYAN}${USER_PASS}${NC}"
+    echo -e "${WHITE}⚙️  Resources : ${CYAN}${RAM_GB}G RAM | ${CPU_CORES} Cores | ${DISK_GB}G Disk${NC}"
+    echo -e "${RED}----------------------------------------------------------${NC}"
+    echo -e "${WHITE}🔌 Local SSH  : ssh ${USER_NAME}@localhost -p ${TCP_HOST_PORT}${NC}"
+    if [ -n "$CF_HOST" ]; then
+        echo -e "${RED}----------------------------------------------------------${NC}"
+        echo -e "${YELLOW}🌩️  CLOUDFLARE REVERSE SSH (works from anywhere):${NC}"
+        echo -e "${GREEN}  Terminal 1: cloudflared access tcp --hostname ${CF_HOST} --url localhost:${TCP_HOST_PORT}${NC}"
+        echo -e "${GREEN}  Terminal 2: ssh ${USER_NAME}@localhost -p ${TCP_HOST_PORT}${NC}"
+    else
+        echo -e "${YELLOW}  🌩️  Cloudflare tunnel still connecting... run '${NC}${CYAN}tunnel.sh start${NC}${YELLOW}' to retry.${NC}"
+    fi
+    if [ -n "$SSHX_URL" ]; then
+        echo -e "${RED}----------------------------------------------------------${NC}"
+        echo -e "${YELLOW}🔥 SSHX WEB TERMINAL (Copy & Paste in Browser):${NC}"
+        echo -e "${GREEN}👉 $SSHX_URL 👈${NC}"
+    fi
+    echo -e "${GREEN}==========================================================${NC}"
+}
+
+vps_status() {
     clear
     echo -e "${GREEN}==========================================================${NC}"
-    echo -e "${WHITE}📋 CURRENT VIRTUAL MACHINE INVENTORY${NC}"
+    echo -e "${WHITE}📋 VIRTUAL MACHINE INVENTORY${NC}"
     echo -e "${GREEN}==========================================================${NC}"
     echo ""
-    $SUDO_CMD virsh list --all
+    found=0
+    for env in "$VPS_DIR"/*/.vps_env; do
+        [ -f "$env" ] || continue
+        found=1
+        unset VM_NAME RAM_GB CPU_CORES DISK_GB USER_NAME USER_PASS TCP_HOST_PORT
+        source "$env"
+        if vm_running; then
+            echo -e "  ${GREEN}●${NC} ${CYAN}${VM_NAME}${NC} — RUNNING  (port ${TCP_HOST_PORT}, ${RAM_GB}G/${CPU_CORES}c)"
+        else
+            echo -e "  ${RED}○${NC} ${CYAN}${VM_NAME}${NC} — STOPPED  (port ${TCP_HOST_PORT}, ${RAM_GB}G/${CPU_CORES}c)"
+        fi
+    done
+    [ "$found" -eq 0 ] && echo -e "${RED}  No VMs found. Build one using Option 2.${NC}"
     echo ""
     echo -ne "${BLUE}🔹 Enter VM name for connect info (blank to skip): ${NC}"
-    read VM_NAME
-    if [ -n "$VM_NAME" ]; then
-        echo ""
-        echo -e "${YELLOW}IP Address:${NC}"
-        $SUDO_CMD virsh domifaddr "$VM_NAME" || echo -e "${RED}Could not fetch IP. VM may be off.${NC}"
-        echo ""
-        echo -e "${YELLOW}SSH Command:${NC}"
-        IP=$($SUDO_CMD virsh domifaddr "$VM_NAME" 2>/dev/null | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
-        if [ -n "$IP" ]; then
-            echo -e "${GREEN}ssh ubuntu@${IP}${NC}"
-        fi
+    read SEL_VM
+    if [ -n "$SEL_VM" ] && [ -f "$VPS_DIR/$SEL_VM/.vps_env" ]; then
+        VM_NAME="$SEL_VM"
+        source "$VPS_DIR/$VM_NAME/.vps_env"
+        show_connect_info
     fi
     echo ""
     read -p "Press Enter to return to dashboard..." _
     show_menu
 }
 
-# STEP 4: RESTART VM
+# ==========================================
+# STEP 5: RESTART / STOP / REMOVE
+# ==========================================
 restart_vps() {
     echo ""
     echo -ne "${BLUE}🔹 Enter VM name to restart: ${NC}"
     read VM_NAME
-    if [ -n "$VM_NAME" ]; then
-        $SUDO_CMD virsh reboot "$VM_NAME" 2>/dev/null || $SUDO_CMD virsh start "$VM_NAME" 2>/dev/null || \
-            echo -e "${RED}❌ VM not found. Build one using Option 2.${NC}"
+    if [ ! -f "$VPS_DIR/$VM_NAME/.vps_env" ]; then
+        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
     fi
+    source "$VPS_DIR/$VM_NAME/.vps_env"
+    # Kill supervisor so it doesn't fight us during restart
+    pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
+    "$VPS_DIR/$VM_NAME/stop.sh"
+    stop_tunnels
+    sleep 2
+    start_vm
+    start_tunnels
     echo ""
     read -p "Press Enter to return to dashboard..." _
     show_menu
 }
 
-# STEP 5: REMOVE VM
+stop_vps() {
+    echo ""
+    echo -ne "${BLUE}🔹 Enter VM name to stop: ${NC}"
+    read VM_NAME
+    if [ ! -f "$VPS_DIR/$VM_NAME/.vps_env" ]; then
+        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
+    fi
+    source "$VPS_DIR/$VM_NAME/.vps_env"
+    pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
+    stop_tunnels
+    "$VPS_DIR/$VM_NAME/stop.sh"
+    echo ""
+    read -p "Press Enter to return to dashboard..." _
+    show_menu
+}
+
 remove_vps() {
     echo ""
     echo -ne "${BLUE}🔹 Enter VM name to remove: ${NC}"
     read VM_NAME
-    if [ -n "$VM_NAME" ]; then
-        $SUDO_CMD virsh destroy "$VM_NAME" > /dev/null 2>&1
-        $SUDO_CMD virsh undefine "$VM_NAME" > /dev/null 2>&1
-        $SUDO_CMD rm -f "/var/lib/libvirt/images/${VM_NAME}.qcow2"
-        echo -e "${GREEN}✅ VM '$VM_NAME' removed successfully!${NC}"
+    if [ ! -d "$VPS_DIR/$VM_NAME" ]; then
+        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
+    fi
+    pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
+    if [ -f "$VPS_DIR/$VM_NAME/stop.sh" ]; then "$VPS_DIR/$VM_NAME/stop.sh"; fi
+    stop_tunnels
+    disable_autostart > /dev/null 2>&1
+    rm -rf "$VPS_DIR/$VM_NAME"
+    echo -e "${GREEN}✅ VM '$VM_NAME' removed successfully!${NC}"
+    echo ""
+    read -p "Press Enter to return to dashboard..." _
+    show_menu
+}
+
+# ==========================================
+# STEP 6: AUTOSTART ON BOOT (cron @reboot -> supervisor)
+# ==========================================
+enable_autostart() {
+    START_SCRIPT="$VPS_DIR/$VM_NAME/autostart.sh"
+    if ! crontab -l 2>/dev/null | grep -qF "$START_SCRIPT"; then
+        ( crontab -l 2>/dev/null; echo "@reboot sleep 10 && bash $START_SCRIPT >> $VPS_DIR/$VM_NAME/autostart.log 2>&1" ) | crontab -
+        echo -e "${GREEN}✅ Autostart ENABLED for '$VM_NAME' (supervisor restarts VM+tunnels on boot & crash).${NC}"
+        # launch supervisor now too so crash-restart is active immediately
+        pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
+        "$VPS_DIR/$VM_NAME/autostart.sh"
+    else
+        echo -e "${YELLOW}⚠️  Autostart already enabled for '$VM_NAME'.${NC}"
+    fi
+}
+
+disable_autostart() {
+    crontab -l 2>/dev/null | grep -vF "$VPS_DIR/$VM_NAME/autostart.sh" | crontab - 2>/dev/null || true
+    pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
+    echo -e "${GREEN}✅ Autostart DISABLED (supervisor stopped).${NC}"
+}
+
+toggle_autostart() {
+    echo ""
+    echo -ne "${BLUE}🔹 Enter VM name: ${NC}"
+    read VM_NAME
+    if [ ! -f "$VPS_DIR/$VM_NAME/.vps_env" ]; then
+        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
+    fi
+    source "$VPS_DIR/$VM_NAME/.vps_env"
+    if crontab -l 2>/dev/null | grep -qF "$VPS_DIR/$VM_NAME/autostart.sh"; then
+        disable_autostart
+    else
+        enable_autostart
     fi
     echo ""
     read -p "Press Enter to return to dashboard..." _
