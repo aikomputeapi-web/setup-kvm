@@ -404,31 +404,40 @@ case "\$CMD" in
     # --- Cloudflare TCP tunnel (reverse SSH) ---
     if [ -f "$VDIR/cf.pid" ] && kill -0 "\$(cat "$VDIR/cf.pid")" 2>/dev/null; then
         echo "cloudflared already running."
-    else
+    elif command -v cloudflared > /dev/null 2>&1; then
         nohup setsid cloudflared tunnel --url tcp://localhost:\${TCP_HOST_PORT} \\
             --no-autoupdate --loglevel info \\
             </dev/null > "$VDIR/cf.log" 2>&1 &
         echo \$! > "$VDIR/cf.pid"
         echo "cloudflared tunnel starting..."
+        # Background poller: grab the trycloudflare hostname as soon as it
+        # appears and write it to connect.txt. Does NOT block the dashboard.
+        # Excludes api.trycloudflare.com (cloudflared's API endpoint).
+        (
+            for i in \$(seq 1 180); do
+                if [ -f "$VDIR/cf.pid" ] && kill -0 "\$(cat "$VDIR/cf.pid")" 2>/dev/null; then
+                    H=\$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$VDIR/cf.log" 2>/dev/null \\
+                        | grep -v 'https://api\.trycloudflare\.com' | head -n1 | sed 's|https://||')
+                    [ -n "\$H" ] && { echo "\$H" > "$VDIR/connect.txt"; exit 0; }
+                    sleep 1
+                else
+                    echo "cloudflared exited before a hostname was assigned." >> "$VDIR/cf.log"
+                    exit 1
+                fi
+            done
+            echo "Timed out waiting for Cloudflare hostname." >> "$VDIR/cf.log"
+            exit 1
+        ) &
+        # Don't wait — return to the menu immediately; status shows the URL once ready.
+    else
+        echo "cloudflared not installed. Run Option 1 (Install Dependencies) first."
     fi
-
-    # --- Poll for the trycloudflare hostname (up to 60s) ---
-    # Exclude api.trycloudflare.com (cloudflared's API endpoint) from the match.
-    CF_HOST=""
-    for i in \$(seq 1 60); do
-        CF_HOST=\$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$VDIR/cf.log" 2>/dev/null \
-            | grep -v 'https://api\.trycloudflare\.com' | head -n1 | sed 's|https://||')
-        [ -n "\$CF_HOST" ] && break
-        sleep 1
-    done
-    [ -n "\$CF_HOST" ] && echo "\$CF_HOST" > "$VDIR/connect.txt"
-    [ -n "\$CF_HOST" ] && echo "Cloudflare hostname: \$CF_HOST"
     ;;
   stop)
     [ -f "$VDIR/sshx.pid" ] && kill "\$(cat "$VDIR/sshx.pid")" 2>/dev/null
     [ -f "$VDIR/cf.pid" ]   && kill "\$(cat "$VDIR/cf.pid")"   2>/dev/null
     pkill -f "cloudflared tunnel --url tcp://localhost:\${TCP_HOST_PORT}" 2>/dev/null || true
-    rm -f "$VDIR/sshx.pid" "$VDIR/cf.pid"
+    rm -f "$VDIR/sshx.pid" "$VDIR/cf.pid" "$VDIR/connect.txt"
     echo "Tunnels stopped."
     ;;
   status)
