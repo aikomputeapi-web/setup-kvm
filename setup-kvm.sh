@@ -155,10 +155,15 @@ install_deps() {
     fi
 
     echo ""
-    if [ -e /dev/kvm ]; then
+    KVM_OK=0
+    if [ -e /dev/kvm ] && exec 3<>/dev/kvm 2>/dev/null; then
+        exec 3>&- 3<&-
+        KVM_OK=1
+    fi
+    if [ "$KVM_OK" = "1" ]; then
         echo -e "${GREEN}✅ KVM ACCELERATION AVAILABLE — VMs will run FAST.${NC}"
     else
-        echo -e "${YELLOW}⚠️  /dev/kvm not found — using SOFTWARE emulation (TCG).${NC}"
+        echo -e "${YELLOW}⚠️  /dev/kvm not usable — using SOFTWARE emulation (TCG).${NC}"
         echo -e "${YELLOW}   VMs run slower but still work in the sandbox.${NC}"
     fi
     echo ""
@@ -319,10 +324,17 @@ if ss -ltn 2>/dev/null | awk '{print \$4}' | grep -qE ":\${TCP_HOST_PORT}\$"; th
     exit 1
 fi
 
-# Auto-select accelerator + CPU model
+# Auto-select accelerator + CPU model.
+# /dev/kvm may EXIST but not be openable (containers often block it), so we
+# actually try to open it rather than just checking for the node.
+KVM_OK=0
+if [ -e /dev/kvm ] && exec 3<>/dev/kvm 2>/dev/null; then
+    exec 3>&- 3<&-
+    KVM_OK=1
+fi
 QEMU_ACCEL="-enable-kvm"
 QEMU_CPU="-cpu host"
-if [ ! -e /dev/kvm ]; then
+if [ "\$KVM_OK" != "1" ]; then
     QEMU_ACCEL="-accel tcg,thread=multi,tb-size=1024"
     QEMU_CPU="-cpu max"
 fi
@@ -401,9 +413,11 @@ case "\$CMD" in
     fi
 
     # --- Poll for the trycloudflare hostname (up to 60s) ---
+    # Exclude api.trycloudflare.com (cloudflared's API endpoint) from the match.
     CF_HOST=""
     for i in \$(seq 1 60); do
-        CF_HOST=\$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$VDIR/cf.log" 2>/dev/null | head -n1 | sed 's|https://||')
+        CF_HOST=\$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$VDIR/cf.log" 2>/dev/null \
+            | grep -v 'https://api\.trycloudflare\.com' | head -n1 | sed 's|https://||')
         [ -n "\$CF_HOST" ] && break
         sleep 1
     done
