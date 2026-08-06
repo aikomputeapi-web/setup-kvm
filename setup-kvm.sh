@@ -78,6 +78,48 @@ vm_running() {
 }
 
 # ==========================================
+# HELPER: NUMBERED VM SELECTOR
+# Lists all VMs as a numbered menu and sets VM_NAME.
+# Returns 0 on selection, 1 if there are no VMs (or user cancels with 0).
+# ==========================================
+select_vm() {
+    local prompt="$1"
+    local idx=0
+    VM_NAMES=()
+    for env in "$VPS_DIR"/*/.vps_env; do
+        [ -f "$env" ] || continue
+        idx=$((idx + 1))
+        VM_NAMES+=("$(basename "$(dirname "$env")")")
+    done
+
+    if [ "$idx" -eq 0 ]; then
+        echo -e "${RED}❌ No VMs found. Build one using Option 2.${NC}"
+        return 1
+    fi
+
+    echo ""
+    echo -e "${WHITE}$prompt${NC}"
+    echo ""
+    local n=1
+    for name in "${VM_NAMES[@]}"; do
+        echo -e "  ${CYAN}[${n}]${NC} ${name}"
+        n=$((n + 1))
+    done
+    echo -e "  ${CYAN}[0]${NC} Cancel"
+    echo ""
+    echo -ne "${BLUE}🔹 Enter Choice [0-${idx}]: ${NC}"
+    read SEL_NUM
+
+    if [ -z "$SEL_NUM" ] || ! echo "$SEL_NUM" | grep -qE '^[0-9]+$' || [ "$SEL_NUM" -lt 1 ] || [ "$SEL_NUM" -gt "$idx" ]; then
+        echo -e "${RED}❌ Invalid choice.${NC}"
+        return 1
+    fi
+
+    VM_NAME="${VM_NAMES[$((SEL_NUM - 1))]}"
+    return 0
+}
+
+# ==========================================
 # MAIN INTERACTIVE LIST MENU
 # ==========================================
 show_menu() {
@@ -561,10 +603,7 @@ vps_status() {
     done
     [ "$found" -eq 0 ] && echo -e "${RED}  No VMs found. Build one using Option 2.${NC}"
     echo ""
-    echo -ne "${BLUE}🔹 Enter VM name for connect info (blank to skip): ${NC}"
-    read SEL_VM
-    if [ -n "$SEL_VM" ] && [ -f "$VPS_DIR/$SEL_VM/.vps_env" ]; then
-        VM_NAME="$SEL_VM"
+    if select_vm "🔹 Select a VM for connect info:"; then
         source "$VPS_DIR/$VM_NAME/.vps_env"
         show_connect_info
     fi
@@ -578,11 +617,7 @@ vps_status() {
 # ==========================================
 restart_vps() {
     echo ""
-    echo -ne "${BLUE}🔹 Enter VM name to restart: ${NC}"
-    read VM_NAME
-    if [ ! -f "$VPS_DIR/$VM_NAME/.vps_env" ]; then
-        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
-    fi
+    if ! select_vm "🔹 Select a VM to restart:"; then sleep 2; show_menu; fi
     source "$VPS_DIR/$VM_NAME/.vps_env"
     # Kill supervisor so it doesn't fight us during restart
     pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
@@ -598,11 +633,7 @@ restart_vps() {
 
 stop_vps() {
     echo ""
-    echo -ne "${BLUE}🔹 Enter VM name to stop: ${NC}"
-    read VM_NAME
-    if [ ! -f "$VPS_DIR/$VM_NAME/.vps_env" ]; then
-        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
-    fi
+    if ! select_vm "🔹 Select a VM to stop:"; then sleep 2; show_menu; fi
     source "$VPS_DIR/$VM_NAME/.vps_env"
     pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
     stop_tunnels
@@ -614,11 +645,7 @@ stop_vps() {
 
 remove_vps() {
     echo ""
-    echo -ne "${BLUE}🔹 Enter VM name to remove: ${NC}"
-    read VM_NAME
-    if [ ! -d "$VPS_DIR/$VM_NAME" ]; then
-        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
-    fi
+    if ! select_vm "🔹 Select a VM to remove:"; then sleep 2; show_menu; fi
     pkill -f "$VPS_DIR/$VM_NAME/supervisor.sh" 2>/dev/null || true
     if [ -f "$VPS_DIR/$VM_NAME/stop.sh" ]; then "$VPS_DIR/$VM_NAME/stop.sh"; fi
     stop_tunnels
@@ -654,11 +681,7 @@ disable_autostart() {
 
 toggle_autostart() {
     echo ""
-    echo -ne "${BLUE}🔹 Enter VM name: ${NC}"
-    read VM_NAME
-    if [ ! -f "$VPS_DIR/$VM_NAME/.vps_env" ]; then
-        echo -e "${RED}❌ VM '$VM_NAME' not found.${NC}"; sleep 2; show_menu
-    fi
+    if ! select_vm "🔹 Select a VM to toggle autostart:"; then sleep 2; show_menu; fi
     source "$VPS_DIR/$VM_NAME/.vps_env"
     if crontab -l 2>/dev/null | grep -qF "$VPS_DIR/$VM_NAME/autostart.sh"; then
         disable_autostart
