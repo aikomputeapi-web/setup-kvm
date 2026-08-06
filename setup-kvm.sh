@@ -3,6 +3,12 @@
 # Clear terminal for clean dashboard view
 clear
 
+# If stdin is not a terminal (e.g. piped via curl | bash), reattach it so
+# interactive 'read' works. Otherwise the menu never receives key presses.
+if [ ! -t 0 ]; then
+    exec </dev/tty
+fi
+
 # ==========================================
 # 🌟 PREMIUM COLOR CODES & FX
 # ==========================================
